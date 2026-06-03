@@ -116,7 +116,15 @@ function normalizeFiles(value: unknown): ProviderArtifactFile[] {
 }
 
 export function parseProviderArtifactBundle(response: string): ProviderArtifactBundle {
-	const parsed = JSON.parse(stripJsonFence(response)) as Record<string, unknown>;
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(stripJsonFence(response)) as Record<string, unknown>;
+	} catch (error) {
+		const snippet = response.slice(0, 200);
+		throw new Error(
+			`Failed to parse provider artifact bundle as JSON (length=${response.length}, snippet=${JSON.stringify(snippet)}): ${error instanceof Error ? error.message : String(error)}`
+		);
+	}
 	const files = normalizeFiles(parsed.files);
 	return {
 		summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
