@@ -8,7 +8,7 @@ import { logger } from '$lib/utils/logger';
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { writeFile, mkdir, appendFile, readFile } from 'fs/promises';
+import { writeFile, mkdir, appendFile, readFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { sparkAgentBridge } from '$lib/services/spark-agent-bridge';
@@ -193,7 +193,11 @@ async function updatePendingRequestStatus(
 			updatedAt: new Date().toISOString(),
 			...extra
 		};
-		await writeFile(pendingRequestFile, JSON.stringify(next, null, 2), 'utf-8');
+		// Atomic write: write to a temp file then rename to prevent TOCTOU
+		// races where concurrent callers overwrite each other's status.
+		const tempFile = `${pendingRequestFile}.tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		await writeFile(tempFile, JSON.stringify(next, null, 2), 'utf-8');
+		await rename(tempFile, pendingRequestFile);
 	} catch {
 		// Keep analysis flow alive even if status updates fail.
 	}
