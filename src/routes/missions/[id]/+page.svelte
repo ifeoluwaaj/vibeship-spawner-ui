@@ -131,6 +131,7 @@
 
 	async function executeMissionControlAction(action: 'pause' | 'resume' | 'kill'): Promise<void> {
 		if (!missionId) return;
+		if (action === 'kill' && !confirm('Kill this mission? This cannot be undone.')) return;
 		missionControlActionLoading = true;
 		missionControlActionMessage = null;
 		missionControlError = null;
