@@ -12,6 +12,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { readFile, writeFile, mkdir, unlink } from 'fs/promises';
+import { requireControlAuth } from '$lib/server/mcp-auth';
 import { existsSync } from 'fs';
 import path from 'path';
 import type { MultiLLMExecutionPack } from '$lib/services/multi-llm-orchestrator';
@@ -79,7 +80,11 @@ interface ActiveMissionState {
  * GET /api/mission/active
  * Returns the active mission state if one exists
  */
-export const GET: RequestHandler = async ({ url }) => {
+export const GET: RequestHandler = async (event) => {
+	const unauthorized = requireControlAuth(event, { surface: 'MissionActiveAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+	if (unauthorized) return unauthorized;
+	const { url } = event;
+
 	try {
 		const missionPath = getActiveMissionPath();
 
@@ -172,7 +177,11 @@ export const GET: RequestHandler = async ({ url }) => {
  * POST /api/mission/active
  * Update the active mission state (called by UI when state changes)
  */
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async (event) => {
+	const unauthorized = requireControlAuth(event, { surface: 'MissionActiveAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+	if (unauthorized) return unauthorized;
+	const { request } = event;
+
 	try {
 		const body = await request.json();
 		const spawnerDir = getSpawnerDir();
@@ -244,7 +253,10 @@ export const POST: RequestHandler = async ({ request }) => {
  * DELETE /api/mission/active
  * Clear the active mission (when completed, cancelled, or user clears)
  */
-export const DELETE: RequestHandler = async () => {
+export const DELETE: RequestHandler = async (event) => {
+	const unauthorized = requireControlAuth(event, { surface: 'MissionActiveAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+	if (unauthorized) return unauthorized;
+
 	try {
 		const missionPath = getActiveMissionPath();
 
