@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import { building } from '$app/environment';
 import type { RequestHandler } from './$types';
+import { requireControlAuth } from '$lib/server/mcp-auth';
 import {
   createSchedule,
   deleteSchedule,
@@ -24,12 +25,17 @@ if (!building && process.env.NODE_ENV !== 'test') {
   startScheduler();
 }
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async (event) => {
+  const unauthorized = requireControlAuth(event, { surface: 'ScheduledAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+  if (unauthorized) return unauthorized;
   const schedules = await listSchedules();
   return json({ ok: true, schedules });
 };
 
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async (event) => {
+  const unauthorized = requireControlAuth(event, { surface: 'ScheduledAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+  if (unauthorized) return unauthorized;
+  const { request } = event;
   let body: Record<string, unknown>;
   try {
     body = asRecord(await request.json());
@@ -56,7 +62,10 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 };
 
-export const DELETE: RequestHandler = async ({ request, url }) => {
+export const DELETE: RequestHandler = async (event) => {
+  const unauthorized = requireControlAuth(event, { surface: 'ScheduledAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+  if (unauthorized) return unauthorized;
+  const { request, url } = event;
   let body: Record<string, unknown> = {};
   try { body = asRecord(await request.json()); } catch {}
   const id = url.searchParams.get('id') || (body?.id ? String(body.id) : '');
