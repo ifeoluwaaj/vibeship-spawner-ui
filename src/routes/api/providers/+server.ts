@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
+import { requireControlAuth } from '$lib/server/mcp-auth';
 import { DEFAULT_MULTI_LLM_PROVIDERS } from '$lib/services/multi-llm-orchestrator';
 import { applyProviderEnvOverrides, resolveProviderRuntimeConfiguration } from '$lib/server/provider-config';
 
@@ -13,7 +14,10 @@ function normalizeProviderId(value: string | undefined): string | null {
 		: null;
 }
 
-export const GET: RequestHandler = async () => {
+export const GET: RequestHandler = async (event) => {
+	const unauthorized = requireControlAuth(event, { surface: 'ProvidersAPI', apiKeyEnvVar: 'MCP_API_KEY' });
+	if (unauthorized) return unauthorized;
+
 	const envRecord = env as Record<string, string | undefined>;
 	const sparkDefaultProvider =
 		normalizeProviderId(envRecord.DEFAULT_MISSION_PROVIDER) ||
