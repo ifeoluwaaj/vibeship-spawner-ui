@@ -1,16 +1,10 @@
 import { logger } from '$lib/utils/logger';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { Cron } from 'croner';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { env as privateEnv } from '$env/dynamic/private';
-import { resolveSparkRunProjectPath } from './spark-run-workspace';
 import { spawnerStateDir } from './spawner-state';
-
-const execFileAsync = promisify(execFile);
 
 function _envVar(name: string): string | undefined {
   const v = (privateEnv as Record<string, string | undefined>)[name];
@@ -55,6 +49,7 @@ interface StoreShape {
 let _store: StoreShape | null = null;
 let _tickTimer: NodeJS.Timeout | null = null;
 let _starting = false;
+const _firingIds = new Set<string>();
 
 function _id(): string {
   return 'sched-' + randomBytes(4).toString('hex');
@@ -176,65 +171,18 @@ async function _fire(record: ScheduleRecord): Promise<{ ok: boolean; summary: st
   if (record.action === 'mission') {
     const goal = String(record.payload.goal ?? '');
     if (!goal) return { ok: false, summary: 'mission has no goal' };
-    const requestId = `sched-${record.id}-${Date.now()}`;
-    const baseUrl = (_envVar('SPAWNER_UI_URL') || 'http://127.0.0.1:3333').replace(/\/$/, '');
-    const requestedProjectPath =
-      typeof record.payload.projectPath === 'string' ? record.payload.projectPath : undefined;
-    const res = await fetch(`${baseUrl}/api/spark/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        goal,
-        chatId: String(record.chatId || 'scheduler'),
-        userId: 'scheduler',
-        requestId,
-        projectPath: resolveSparkRunProjectPath(requestedProjectPath),
-      }),
-    });
-    const body = (await res.json()) as { success?: boolean; missionId?: string; error?: string };
     return {
-      ok: Boolean(body.success),
-      summary: body.success ? `mission ${body.missionId}` : `error: ${body.error || 'unknown'}`,
+      ok: false,
+      summary: 'scheduled mission fire requires fresh Governor authority; stored schedule authority is evidence only'
     };
   }
   if (record.action === 'loop') {
     const chipKey = String(record.payload.chipKey ?? '');
-    const rounds = Math.max(1, Number(record.payload.rounds ?? 2));
     if (!chipKey) return { ok: false, summary: 'loop has no chipKey' };
-    const builderRepo =
-      process.env.SPARK_BUILDER_REPO || path.resolve(process.cwd(), '..', 'spark-intelligence-builder');
-    const home =
-      process.env.SPARK_BUILDER_HOME || path.join(homedir(), '.spark', 'state', 'spark-intelligence');
-    const python = process.env.SPARK_BUILDER_PYTHON || 'python';
-    try {
-      const { stdout } = await execFileAsync(python, [
-        '-m',
-        'spark_intelligence.cli',
-        'loops',
-        'run',
-        '--home',
-        home,
-        '--chip',
-        chipKey,
-        '--rounds',
-        String(rounds),
-        '--json',
-      ], {
-        cwd: builderRepo,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: 900_000,
-      });
-      const parsed = JSON.parse(stdout);
-      return {
-        ok: Boolean(parsed.ok),
-        summary: parsed.ok
-          ? `loop ${chipKey} rounds=${parsed.rounds_completed}`
-          : `loop error: ${parsed.error || 'unknown'}`,
-      };
-    } catch (err: unknown) {
-      return { ok: false, summary: `loop exec failed: ${errorMessage(err)}` };
-    }
+    return {
+      ok: false,
+      summary: 'scheduled loop fire requires fresh Governor authority; stored schedule authority is evidence only'
+    };
   }
   return { ok: false, summary: `unknown action ${record.action}` };
 }
@@ -279,6 +227,13 @@ async function _tick(): Promise<void> {
       continue;
     }
     if (new Date(rec.nextFireAt) > now) continue;
+    if (_firingIds.has(rec.id)) {
+      // Previous fire for this schedule is still in flight (e.g. long subprocess).
+      // Skip so we do not relaunch the mission or emit a duplicate relay message.
+      continue;
+    }
+    const nextFireAt = _computeNext(rec.cron, rec.timezone);
+    _firingIds.add(rec.id);
     try {
       const result = await _fire(rec);
       rec.lastFiredAt = new Date().toISOString();
@@ -289,8 +244,10 @@ async function _tick(): Promise<void> {
       rec.lastFiredAt = new Date().toISOString();
       rec.fireCount += 1;
       rec.lastStatus = 'crash: ' + errorMessage(err);
+    } finally {
+      _firingIds.delete(rec.id);
     }
-    rec.nextFireAt = _computeNext(rec.cron, rec.timezone);
+    rec.nextFireAt = nextFireAt;
     dirty = true;
   }
   if (dirty) await _save();
@@ -300,10 +257,14 @@ export function startScheduler(): void {
   if (_tickTimer || _starting) return;
   _starting = true;
   _tick()
-    .catch(() => {})
+    .catch((err) => {
+      logger.error('[scheduler] initial tick failed', errorMessage(err));
+    })
     .finally(() => {
       _tickTimer = setInterval(() => {
-        _tick().catch(() => {});
+        _tick().catch((err) => {
+          logger.error('[scheduler] tick failed', errorMessage(err));
+        });
       }, TICK_MS);
       _starting = false;
     });
@@ -315,3 +276,23 @@ export function stopScheduler(): void {
     _tickTimer = null;
   }
 }
+
+export function resetSchedulerForTests(): void {
+  stopScheduler();
+  _store = null;
+  _starting = false;
+}
+
+export async function runSchedulerTickForTests(): Promise<void> {
+  await _tick();
+}
+
+export const _schedulerInternalsForTests = {
+  fire: _fire,
+  load: _load,
+  tick: _tick,
+  reset(): void {
+    _store = null;
+    stopScheduler();
+  },
+};
